@@ -10,6 +10,7 @@ const MAX_BATCH = 50;
 const MAX_TEXT = 4096; // full firmware clipping, not the text-export cap
 const MAX_NOTE = 4096;
 const MAX_CHAPTER = 64;
+const MAX_XPATH = 512; // KOReader pos0/pos1 xpointers
 
 interface ClippingRow {
   id: string;
@@ -32,12 +33,30 @@ interface ClippingRow {
   layout_signature: number;
   start_offset: number | null;
   end_offset: number | null;
+  xpath_start: string | null;
+  xpath_end: string | null;
 }
 
 function uint(v: unknown, fallback?: number): number | undefined {
   if (v === undefined && fallback !== undefined) return fallback;
   if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 0xffffffff) return v;
   return undefined;
+}
+
+/**
+ * Parses an optional xpath pair. Returns `null` for an explicit clear, `undefined` when the
+ * client omitted both fields (keep stored), or `false` when invalid.
+ */
+function xpathPair(o: Record<string, unknown>): { start: string; end: string } | null | undefined | false {
+  const hasStart = Object.hasOwn(o, 'xpath_start');
+  const hasEnd = Object.hasOwn(o, 'xpath_end');
+  if (!hasStart && !hasEnd) return undefined;
+  if (hasStart !== hasEnd) return false;
+  if (o.xpath_start === null && o.xpath_end === null) return null;
+  const ok = (v: unknown) =>
+    typeof v === 'string' && v.length > 0 && v.startsWith('/') && Buffer.byteLength(v) <= MAX_XPATH;
+  if (!ok(o.xpath_start) || !ok(o.xpath_end)) return false;
+  return { start: o.xpath_start as string, end: o.xpath_end as string };
 }
 
 export function clippingRoutes(db: DB): Hono<AppEnv> {
@@ -48,10 +67,11 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
     const user = c.get('user');
     const rows = db
       .prepare(
-        `SELECT document, id, spine_index, paragraph_index, start_offset, chapter_title, text, note, created_at
+        `SELECT document, id, spine_index, paragraph_index, start_offset, chapter_title, text, note, created_at,
+                xpath_start, xpath_end
          FROM clippings WHERE user_id = ? AND deleted = 0 ORDER BY created_at DESC, id LIMIT 5000`
       )
-      .all(user.id) as unknown as (Pick<ClippingRow, 'id' | 'spine_index' | 'paragraph_index' | 'start_offset' | 'chapter_title' | 'text' | 'note' | 'created_at'> & { document: string })[];
+      .all(user.id) as unknown as (Pick<ClippingRow, 'id' | 'spine_index' | 'paragraph_index' | 'start_offset' | 'chapter_title' | 'text' | 'note' | 'created_at' | 'xpath_start' | 'xpath_end'> & { document: string })[];
     return c.json({
       items: rows.map((r) => ({
         document: r.document,
@@ -63,6 +83,8 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
         text: r.text,
         note: r.note,
         created_at: r.created_at,
+        xpath_start: r.xpath_start,
+        xpath_end: r.xpath_end,
       })),
     });
   });
@@ -82,7 +104,7 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
       .prepare(
         `SELECT id, spine_index, start_page, end_page, page_count, start_word, end_word, word_count,
                 paragraph_index, chapter_title, text, note, color, created_at, deleted, updated_at,
-                revision, layout_signature, start_offset, end_offset
+                revision, layout_signature, start_offset, end_offset, xpath_start, xpath_end
          FROM clippings WHERE user_id = ? AND document = ? AND ${revisionMode ? 'revision' : 'updated_at'} > ?
          ORDER BY ${revisionMode ? 'revision' : 'updated_at, id'} LIMIT ?`
       )
@@ -90,6 +112,8 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
     const more = rows.length > limit;
     const items = more ? rows.slice(0, limit) : rows;
     const until = more ? items[items.length - 1].updated_at : nowSeconds();
+    // Firmware asks for format=reader to bound response memory; it has no use for xpaths.
+    const readerFormat = c.req.query('format') === 'reader';
     return c.json({
       document,
       sync_version: 2,
@@ -109,13 +133,14 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
         para: r.paragraph_index,
         chapter: r.chapter_title,
         text: r.text,
-        ...(c.req.query('format') === 'reader' ? {} : { note: r.note, color: r.color }),
+        ...(readerFormat ? {} : { note: r.note, color: r.color }),
         created_at: r.created_at,
         deleted: r.deleted,
         updated_at: r.updated_at,
         layout_signature: r.layout_signature,
         start_offset: r.start_offset,
         end_offset: r.end_offset,
+        ...(readerFormat ? {} : { xpath_start: r.xpath_start, xpath_end: r.xpath_end }),
       })),
     });
   });
@@ -142,8 +167,9 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
     const upsert = db.prepare(
       `INSERT INTO clippings (user_id, document, id, spine_index, start_page, end_page, page_count,
                               start_word, end_word, word_count, paragraph_index, chapter_title, text,
-                              note, color, created_at, deleted, updated_at, layout_signature, start_offset, end_offset, revision)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?,
+                              note, color, created_at, deleted, updated_at, layout_signature, start_offset, end_offset,
+                              xpath_start, xpath_end, revision)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?,
                (SELECT revision FROM clipping_sync_clock WHERE id = 1))
        ON CONFLICT(user_id, document, id) DO UPDATE SET
          spine_index = excluded.spine_index,
@@ -164,6 +190,8 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
          layout_signature = excluded.layout_signature,
          start_offset = excluded.start_offset,
          end_offset = excluded.end_offset,
+         xpath_start = CASE WHEN ? THEN excluded.xpath_start ELSE clippings.xpath_start END,
+         xpath_end = CASE WHEN ? THEN excluded.xpath_end ELSE clippings.xpath_end END,
          revision = excluded.revision
        WHERE clippings.deleted = 0`
     );
@@ -204,6 +232,7 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
       const startOffset = o.start_offset == null ? null : uint(o.start_offset);
       const endOffset = o.end_offset == null ? null : uint(o.end_offset);
       const para = o.para === undefined || o.para === null ? null : uint(o.para);
+      const xpaths = xpathPair(o);
       if (
         layoutSignature === undefined || startOffset === undefined || endOffset === undefined ||
         ((startOffset === null) !== (endOffset === null)) ||
@@ -217,6 +246,7 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
         words === undefined ||
         createdAt === undefined ||
         para === undefined ||
+        xpaths === false ||
         typeof o.text !== 'string' ||
         o.text.length === 0 ||
         Buffer.byteLength(o.text) > MAX_TEXT
@@ -233,7 +263,10 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
           user.id, document, id, spine, startPage, endPage, pages,
           startWord, endWord, words, para, chapter, text,
           note, color, createdAt, now, layoutSignature, startOffset, endOffset,
-          Number(Object.hasOwn(o, 'note')), Number(Object.hasOwn(o, 'color'))
+          xpaths ? xpaths.start : null, xpaths ? xpaths.end : null,
+          Number(Object.hasOwn(o, 'note')), Number(Object.hasOwn(o, 'color')),
+          // Omitted xpaths (e.g. an update from CrossInk firmware) keep the stored pair.
+          Number(xpaths !== undefined), Number(xpaths !== undefined)
         );
         if (result.changes) highlightIds.add(id);
       });

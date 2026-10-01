@@ -46,7 +46,7 @@ export function createApp(db: DB, config: Config, opts: AppOptions = {}): Hono<A
   app.use('/api/v1/*', apiCors);
   app.use('/healthz', apiCors);
 
-  app.get('/healthz', (c) => c.json({ status: 'ok', version: VERSION }));
+  app.get('/healthz', (c) => c.json({ status: 'ok', version: VERSION, features: ['clipping_xpath'] }));
 
   // The full CrossPoint Sync app (same build as the phone/desktop app) at /app/.
   // WEB_APP_DIR is set in the Docker image; locally it falls back to app/dist.

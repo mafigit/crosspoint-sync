@@ -369,6 +369,24 @@ A deleted ID cannot be resurrected by a delayed upload; create a new ID to save
 the same quote again. Enable **Sync Clippings** in the firmware's **CrossPoint Sync**
 settings to sync clippings alongside the current book's manual progress sync.
 
+#### KOReader anchors (`xpath_start` / `xpath_end`) — fork extension
+
+Clippings may also carry KOReader's exact highlight positions (`pos0` / `pos1` xpointers):
+
+```json
+{"id": "...", "spine": 7, "text": "...", "created_at": 1752300000,
+ "xpath_start": "/body/DocFragment[8]/body/div[2]/p[4]/text()[1].12",
+ "xpath_end":   "/body/DocFragment[8]/body/div[2]/p[4]/text()[1].53"}
+```
+
+- Both or neither; each a string starting with `/`, ≤ 512 bytes. Explicit `null`s clear the pair.
+- **Omitted = keep stored.** CrossInk firmware never sends these fields, so its updates never erase
+  anchors a KOReader client attached. (All other fields still replace the row on PUT — a client
+  updating someone else's clipping must echo the positional fields it received.)
+- Returned by `GET /api/v1/clippings/{document}` and `GET /api/v1/clippings`; omitted from
+  `format=reader` responses to keep firmware memory bounded.
+- Clients detect support via `GET /healthz` → `"features": ["clipping_xpath"]`.
+
 ### Reading stats
 
 Model (matches the firmware's nearby P2P stats sync): **each device uploads its own snapshot;
@@ -593,6 +611,7 @@ Unauthenticated. `{"status": "ok", "version": "0.1.0"}`.
 | List page size | default 50, max 100 |
 | `progress` string | 4096 bytes |
 | position `anchor` / `xpath` | 48 / 120 bytes |
-| clipping `text` / `note` / `chapter` | 2048 / 4096 bytes / 64 chars |
+| clipping `text` / `note` / `chapter` | 4096 / 4096 bytes / 64 chars |
+| clipping `xpath_start` / `xpath_end` | 512 bytes each |
 | bookmark `xpath` / `summary` | 512 / 256 chars |
 | username / password key | 64 / 128 chars |
