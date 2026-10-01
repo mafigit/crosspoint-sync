@@ -7,3 +7,5 @@ data/
 .DS_Store
 .localdata/
 .firecrawl/
+e2e/.rocks/
+e2e/ffi/

@@ -1,6 +1,6 @@
 services:
   crosspoint-sync:
-    image: ghcr.io/crosspoint-reader/crosspoint-sync:main
+    image: ghcr.io/mafigit/crosspoint-sync:main
     ports:
       - "8080:8080"
     volumes:

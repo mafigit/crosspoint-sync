@@ -10,3 +10,5 @@ docs
 app/src-tauri
 app/node_modules
 app/dist
+koreader
+e2e
