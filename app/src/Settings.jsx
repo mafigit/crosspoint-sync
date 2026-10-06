@@ -36,6 +36,8 @@ function Appearance({ theme: [pref, setPref] }) {
 // What each service does, as on the web dashboard.
 const HINTS = {
   hardcover: 'Syncs your reading progress and shelf status to Hardcover.',
+  storygraph:
+    'Syncs your reading progress and marks books Read on StoryGraph. Paste the _storygraph_session and remember_user_token cookies from your signed-in browser (DevTools, Cookies). Beta and unofficial: signing out of StoryGraph there pauses sync until you link again.',
   microblog: 'Keeps your Currently reading and Finished reading bookshelves in sync.',
   readwise: 'Syncs your highlights to Readwise.',
   'readwise-reader': 'Archives books in Reader when you finish them, and brings your Reader progress back.',
@@ -208,6 +210,17 @@ function LinkForm({ session, conn, onLinked }) {
         {submit('Connect', () => ({
           server: (v.server ?? '').trim(),
           token: (v.token ?? '').trim(),
+        }))}
+      </form>
+    )
+  } else if (conn.credential_kind === 'cookies') {
+    body = (
+      <form className="space-y-2">
+        <input className={`${field} font-mono`} type="password" placeholder="_storygraph_session" value={v.session ?? ''} onChange={set('session')} autoComplete="off" />
+        <input className={`${field} font-mono`} type="password" placeholder="remember_user_token" value={v.remember ?? ''} onChange={set('remember')} autoComplete="off" />
+        {submit(`Link ${conn.name}`, () => ({
+          session: (v.session ?? '').trim(),
+          remember: (v.remember ?? '').trim(),
         }))}
       </form>
     )
