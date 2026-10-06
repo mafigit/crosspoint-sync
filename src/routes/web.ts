@@ -590,6 +590,7 @@ async function linkCredential(body) {
 
 const HINTS = {
   hardcover: 'Syncs your reading progress and shelf status to Hardcover.',
+  storygraph: 'Syncs your reading progress and marks books Read on StoryGraph. Books are matched by title and author.',
   microblog: 'Connect an app token to keep your Currently reading and Finished reading bookshelves in sync.',
   readwise: 'Paste your Readwise access token from readwise.io/access_token. Syncs your highlights.',
   'readwise-reader': 'Paste your Readwise access token from readwise.io/access_token. Archives books in Reader when you finish them, and brings your Reader progress back to your device.',
@@ -613,6 +614,13 @@ const TOKEN_HELP = {
     + '<li>Create a separate token for <b>CrossPoint Sync</b>.</li>'
     + '<li>Copy the new token and paste it below.</li>'
     + '</ol><p style="margin-bottom:0">Treat this token like a password: it has full access to your Micro.blog account. CrossPoint Sync encrypts it before storing it.</p></div>',
+  storygraph: '<div class="muted" style="margin-bottom:18px"><p style="margin-top:0"><b>Copy two cookies from your StoryGraph session:</b></p>'
+    + '<ol style="padding-left:20px;margin-bottom:10px">'
+    + '<li>Sign in at <a href="https://app.thestorygraph.com" target="_blank" rel="noopener noreferrer">app.thestorygraph.com</a>.</li>'
+    + '<li>Open the browser developer tools (F12), then <b>Application</b> (Chrome) or <b>Storage</b> (Firefox) &rarr; <b>Cookies</b> &rarr; app.thestorygraph.com.</li>'
+    + '<li>Copy the values of <code>_storygraph_session</code> and <code>remember_user_token</code> into the fields below.</li>'
+    + '</ol>'
+    + '<p style="margin-bottom:0"><b>Beta and unofficial.</b> StoryGraph has no API, so this uses your browser session against the site\u2019s own web endpoints. Your password never reaches this server; the cookies are encrypted at rest. Signing out of StoryGraph in that browser ends the session, and sync pauses until you link it again.</p></div>',
   kindle: '<div class="muted" style="margin-bottom:18px">'
     + '<p style="margin-top:0"><b>Set up with the CrossPoint Kindle Link extension (recommended):</b></p>'
     + '<ol style="padding-left:20px;margin-bottom:10px">'
@@ -672,6 +680,15 @@ function render(conn) {
       $('e').textContent = '';
       const r = await linkCredential({ server: $('srv').value.trim(), token: $('tok').value.trim() });
       if (r.ok) done(); else $('e').textContent = r.data.message || 'Could not connect';
+    };
+  } else if (conn.credential_kind === 'cookies') {
+    f.innerHTML = (TOKEN_HELP[ID] || '') + '<label>_storygraph_session</label><input id="ck1" class="mono" type="password" autocomplete="off" placeholder="paste cookie value">'
+      + '<div style="margin-top:10px"><label>remember_user_token</label><input id="ck2" class="mono" type="password" autocomplete="off" placeholder="paste cookie value"></div>'
+      + '<button class="primary full mt" id="go">Link ' + esc(conn.name) + '</button><div class="err" id="e"></div>';
+    $('go').onclick = async () => {
+      $('e').textContent = '';
+      const r = await linkCredential({ session: $('ck1').value.trim(), remember: $('ck2').value.trim() });
+      if (r.ok) done(); else $('e').textContent = r.data.message || 'Could not link';
     };
   } else if (conn.credential_kind === 'device_code') {
     f.innerHTML = '<p class="muted" style="margin-top:0">Click start, then approve the request on ' + esc(conn.name) + '.</p>'

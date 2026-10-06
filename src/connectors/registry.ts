@@ -8,11 +8,13 @@ import { audiobookshelfConnector } from './audiobookshelf.js';
 import { microblogConnector } from './microblog.js';
 import { kindleConnector } from './kindle.js';
 import { bookorbitConnector } from './bookorbit.js';
+import { storygraphConnector } from './storygraph.js';
 
 /** All connectors known to this build. */
 const CONNECTORS: Connector[] = [
   kosyncConnector,
   hardcoverConnector,
+  storygraphConnector,
   readwiseConnector,
   readwiseReaderConnector,
   bookfusionConnector,
