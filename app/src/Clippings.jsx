@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Copy, FileDown, Quote, Search, Share2 } from 'lucide-react'
-import { api, isApp } from './api.js'
+import { api, isApp, clipTime } from './api.js'
 import { saveFile } from './shareCard.js'
 import { ClipMenu, ClipShare, DeleteClip, hold } from './Book.jsx'
 import { Card, Cover, EmptyState, ErrorNote, Eyebrow, Spinner, useLoad } from './ui.jsx'
 
-const date = (unix) => new Date(unix * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+const date = (unix) => unix && new Date(unix * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 
 // Same clipping all day, a different one tomorrow.
 function ofTheDay(items) {
@@ -44,7 +44,7 @@ function Clip({ session, clip, book, onShare, onDelete, showBook }) {
         <button onClick={() => onShare(clip)} className="-ml-2 flex h-9 items-center gap-1.5 rounded-full px-2 text-sm font-medium text-brand-600 active:bg-stone-100">
           <Share2 className="size-4" /> Share
         </button>
-        <p className="truncate font-mono text-[0.65rem] text-stone-400">{[clip.chapter, date(clip.created_at)].filter(Boolean).join(' · ')}</p>
+        <p className="truncate font-mono text-[0.65rem] text-stone-400">{[clip.chapter, date(clipTime(clip))].filter(Boolean).join(' · ')}</p>
       </div>
     </Card>
   )

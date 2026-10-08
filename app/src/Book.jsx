@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Hash, MoreHorizontal, Split, Trash2, Image as ImageIcon, Loader2, Merge, Quote, Search, Share2, Star, X } from 'lucide-react'
-import { api, isApp } from './api.js'
+import { api, isApp, clipTime } from './api.js'
 import { renderCard } from './shareCard.js'
 import { isPace, moodEmoji } from './moods.js'
 import ShareSheet from './ShareSheet.jsx'
@@ -220,7 +220,7 @@ function Clippings({ session, book }) {
                 >
                   <Share2 className="size-4" /> Share
                 </button>
-                <p className="font-mono text-[0.65rem] text-stone-400">{date(c.created_at)}</p>
+                <p className="font-mono text-[0.65rem] text-stone-400">{date(clipTime(c))}</p>
               </div>
             </Card>
           </div>

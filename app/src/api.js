@@ -204,7 +204,7 @@ export const api = {
     } catch (e) {
       if (e.status !== 404) throw e
       const per = await Promise.all(books.map((b) => api.clippings(s, b.document).then((items) => items.map((c) => ({ ...c, document: b.document })))))
-      return per.flat().sort((a, b) => b.created_at - a.created_at)
+      return per.flat().sort((a, b) => clipTime(b) - clipTime(a))
     }
   },
   deleteClipping: (s, doc, id) =>
@@ -223,3 +223,7 @@ export const api = {
       .sort((a, b) => a.spine - b.spine || (a.start_offset ?? a.para ?? a.start_page) - (b.start_offset ?? b.para ?? b.start_page))
   },
 }
+
+// When a clipping was made. Readers without a set clock (older CrossInk firmware) send seconds since boot;
+// for those the best date is when it reached the server.
+export const clipTime = (c) => (c.created_at >= 978307200 ? c.created_at : c.updated_at ?? null)

@@ -12,6 +12,9 @@ const MAX_TEXT = 4096; // full firmware clipping, not the text-export cap
 const MAX_NOTE = 4096;
 const MAX_CHAPTER = 64;
 const MAX_XPATH = 512; // KOReader pos0/pos1 xpointers
+// Readers without a set clock (older CrossInk firmware) send seconds since boot as created_at; anything before
+// 2001 is that, and the clipping sorts by when it reached the server instead.
+const MIN_WALL_CLOCK = 978307200;
 
 interface ClippingRow {
   id: string;
@@ -69,10 +72,11 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
     const rows = db
       .prepare(
         `SELECT document, id, spine_index, paragraph_index, start_offset, chapter_title, text, note, created_at,
-                xpath_start, xpath_end
-         FROM clippings WHERE user_id = ? AND deleted = 0 ORDER BY created_at DESC, id LIMIT 5000`
+                updated_at, xpath_start, xpath_end
+         FROM clippings WHERE user_id = ? AND deleted = 0
+         ORDER BY CASE WHEN created_at >= ${MIN_WALL_CLOCK} THEN created_at ELSE updated_at END DESC, id LIMIT 5000`
       )
-      .all(user.id) as unknown as (Pick<ClippingRow, 'id' | 'spine_index' | 'paragraph_index' | 'start_offset' | 'chapter_title' | 'text' | 'note' | 'created_at' | 'xpath_start' | 'xpath_end'> & { document: string })[];
+      .all(user.id) as unknown as (Pick<ClippingRow, 'id' | 'spine_index' | 'paragraph_index' | 'start_offset' | 'chapter_title' | 'text' | 'note' | 'created_at' | 'updated_at' | 'xpath_start' | 'xpath_end'> & { document: string })[];
     return c.json({
       items: rows.map((r) => ({
         document: r.document,
@@ -84,6 +88,7 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
         text: r.text,
         note: r.note,
         created_at: r.created_at,
+        updated_at: r.updated_at,
         xpath_start: r.xpath_start,
         xpath_end: r.xpath_end,
       })),

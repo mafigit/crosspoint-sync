@@ -37,6 +37,20 @@ describe('v1 clippings sync', () => {
     expect(body.items[0]).toMatchObject({ ...CLIP, deleted: 0, note: null, color: null });
   });
 
+  it('the all-books list carries updated_at and sorts uptime-stamped clippings by it', async () => {
+    const { app } = makeTestApp();
+    const { headers } = await registerUser(app);
+    const put = (items: Record<string, unknown>[]) =>
+      app.request(`/api/v1/clippings/${DOC}`, { method: 'PUT', headers, body: JSON.stringify({ items }) });
+    await put([{ ...CLIP, id: 'aaaaaaaaaaaaaaaa', created_at: 1000000000 }]); // 2001, a real date
+    await put([{ ...CLIP, id: 'bbbbbbbbbbbbbbbb', created_at: 340 }]); // seconds since boot, synced now
+    const { items } = (await (await app.request('/api/v1/clippings', { headers })).json()) as {
+      items: { id: string; updated_at: number }[];
+    };
+    expect(items.map((c) => c.id)).toEqual(['bbbbbbbbbbbbbbbb', 'aaaaaaaaaaaaaaaa']);
+    expect(items[0].updated_at).toBeGreaterThan(1700000000);
+  });
+
   it('para is optional (CrossInk uses UINT16_MAX for unavailable)', async () => {
     const { app } = makeTestApp();
     const { headers } = await registerUser(app);
