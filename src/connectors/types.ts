@@ -96,6 +96,12 @@ export interface OutboundEvent {
   position?: Record<string, unknown> | null;
   /** unix seconds when this happened on the device/server. */
   timestamp: number;
+  /**
+   * Finished events only: unix seconds the user actually finished the book, when
+   * it differs from `timestamp` (a backdated import or a manually entered date).
+   * Connectors that keep read dates record this instead of the push time.
+   */
+  finishedAt?: number;
   /** For highlight events. */
   highlight?: {
     text: string;

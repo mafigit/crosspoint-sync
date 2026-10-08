@@ -473,7 +473,13 @@ weighted by `pace_n`, `start_date` = earliest non-zero, `finished_date` = latest
 
 Manual reading status: `{"status": "reading" | "paused" | "finished" | "dnf"}`, or
 `{"status": null}` to go back to deriving it from progress. `finished` also fans out a finished
-event to linked write-connectors. `GET /api/v1/progress` items carry the effective `status`
+event to linked write-connectors.
+
+With `"status": "finished"` an optional `finished_at` (unix seconds, not in the future) backdates
+the finish, e.g. when importing reading history: it becomes `status_at` and the book's finish date
+in activity, and connectors that keep read dates use it (Hardcover closes the read on that day;
+StoryGraph sets the read's finish date, also on a book already marked read there). Any other
+status with `finished_at` is rejected. `GET /api/v1/progress` items carry the effective `status`
 (manual, else `finished` at ≥ 98%, else `reading`) and `cover_url`.
 
 #### GET /api/v1/documents/{document}/cover

@@ -8,7 +8,7 @@ import { coverCandidates, documentInfo } from '../../models/cover.js';
 import { nextAfter, seriesBooks } from '../../models/hardcover-catalog.js';
 import { extractTitleAuthor } from '../../connectors/matching.js';
 import { documentMeta } from '../../connectors/store.js';
-import { fanOutProgress } from '../../connectors/fanout.js';
+import { fanOutFinished } from '../../connectors/fanout.js';
 import type { HttpTransport } from '../../connectors/types.js';
 import { fetchTransport } from '../../connectors/registry.js';
 
@@ -113,6 +113,8 @@ export function documentRoutes(db: DB, http?: HttpTransport): Hono<AppEnv> {
 
   // Manual reading status; null clears it back to "derive from progress".
   // Marking finished also fans out to linked services (Hardcover, Micro.blog...).
+  // `finished_at` (unix seconds, with status "finished") backdates the finish,
+  // e.g. for an import; services that keep read dates record it.
   app.put('/documents/:document/status', async (c) => {
     const param = c.req.param('document');
     let body: unknown;
@@ -121,19 +123,29 @@ export function documentRoutes(db: DB, http?: HttpTransport): Hono<AppEnv> {
     } catch {
       return kosyncError(c, 403, 2003, 'Invalid request');
     }
-    const status = (body as Record<string, unknown> | null)?.status ?? null;
+    const o = (body as Record<string, unknown> | null) ?? {};
+    const status = o.status ?? null;
+    const finishedAt = o.finished_at ?? null;
     if (!isValidDocument(param) || (status !== null && !STATUSES.includes(status as never))) {
+      return kosyncError(c, 403, 2003, 'Invalid request');
+    }
+    const now = nowSeconds();
+    if (
+      finishedAt !== null &&
+      (status !== 'finished' || !Number.isSafeInteger(finishedAt) || (finishedAt as number) <= 0 ||
+        (finishedAt as number) > now)
+    ) {
       return kosyncError(c, 403, 2003, 'Invalid request');
     }
     const user = c.get('user');
     const document = resolveDocument(db, user.id, param);
-    const now = nowSeconds();
+    const statusAt = (finishedAt as number | null) ?? now;
     db.prepare(
       `INSERT INTO documents (user_id, document, status, status_at, updated_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(user_id, document) DO UPDATE SET status = excluded.status, status_at = excluded.status_at`
-    ).run(user.id, document, status as string | null, now, now);
-    if (status === 'finished') fanOutProgress(db, user.id, document, 1, now);
-    return c.json({ document, status, status_at: now });
+    ).run(user.id, document, status as string | null, statusAt, now);
+    if (status === 'finished') fanOutFinished(db, user.id, document, now, (finishedAt as number | null) ?? undefined);
+    return c.json({ document, status, status_at: statusAt });
   });
 
   app.get('/documents/:document/cover', async (c) => {

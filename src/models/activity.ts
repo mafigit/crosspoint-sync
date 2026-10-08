@@ -94,8 +94,10 @@ export function computeActivity(rows: LogRow[], docs: Map<string, DocInfo>, tzOf
       b.to = max;
       if (logFinish === null && max >= FINISHED_AT) logFinish = r.at;
     }
-    const finished =
-      info?.status == null ? logFinish : info.status === 'finished' ? (logFinish ?? info.status_at) : null;
+    // A manual finish that predates the log is a backdated one (an import), so it wins.
+    const manualFinish =
+      logFinish != null && info?.status_at != null ? Math.min(logFinish, info.status_at) : (logFinish ?? info?.status_at ?? null);
+    const finished = info?.status == null ? logFinish : info.status === 'finished' ? manualFinish : null;
     const pagesRead = pageCount ? Math.round(max * pageCount) : null;
     pagesTotal += pagesRead ?? 0;
     books.push({

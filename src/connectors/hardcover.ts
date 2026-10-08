@@ -557,10 +557,14 @@ async function push(
   //    else today. Update the current open read, or start a new one.
   // Close the read when finishing; the mutation replaces the record, so a
   // missing finished_at would leave it open.
-  const finishedAt = finished ? today : null;
+  // A backdated finish (import, manual date) closes the read on that day instead.
+  const finishDay = finished && ev.finishedAt ? new Date(ev.finishedAt * 1000).toISOString().slice(0, 10) : today;
+  const finishedAt = finished ? finishDay : null;
+  // A read can't start after it ends: pull a later (or missing) start back to the finish.
+  const startFor = (start: string | null | undefined) => (start && start <= finishDay ? start : finished ? finishDay : start || today);
   let res;
   if (openReadId) {
-    const startedAt = openRead?.started_at || today; // preserve, else backfill
+    const startedAt = startFor(openRead?.started_at); // preserve, else backfill
     res = await gql(
       http,
       token,
@@ -586,7 +590,7 @@ async function push(
            user_book_read { id }
          }
        }`,
-      { id: userBookId, pages: progressPages, editionId: edition.id, startedAt: today, finishedAt }
+      { id: userBookId, pages: progressPages, editionId: edition.id, startedAt: startFor(null), finishedAt }
     );
   }
   const readAuth = classify(res);

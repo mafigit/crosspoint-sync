@@ -31,6 +31,26 @@ describe('reading status', () => {
     await set(null);
     expect((await list()).status).toBe('reading');
   });
+
+  it('accepts a past finished_at with status finished only', async () => {
+    const { app } = makeTestApp();
+    const { headers } = await registerUser(app);
+    await app.request('/syncs/progress', { method: 'PUT', headers, body: JSON.stringify(PUT_BODY) });
+    const set = (body: unknown) =>
+      app.request(`/api/v1/documents/${DOC}/status`, { method: 'PUT', headers, body: JSON.stringify(body) });
+    const now = Math.floor(Date.now() / 1000);
+    const res = await set({ status: 'finished', finished_at: 1_685_707_200 });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: 'finished', status_at: 1_685_707_200 });
+    for (const bad of [
+      { status: 'dnf', finished_at: 1_685_707_200 },
+      { status: 'finished', finished_at: now + 3600 },
+      { status: 'finished', finished_at: '2023-06-02' },
+      { status: 'finished', finished_at: 0 },
+    ]) {
+      expect((await set(bad)).status).toBe(403);
+    }
+  });
 });
 
 describe('covers, page counts and activity', () => {

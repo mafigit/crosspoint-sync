@@ -101,6 +101,78 @@ export function extractCsrf(html: string): string | null {
   return m ? decodeEntities(m[1]) : null;
 }
 
+/** The "edit read date" link of the book's latest read, from its book page. */
+export function extractReadInstanceEdit(html: string): string | null {
+  const m = html.match(/href=["']([^"']*\/edit-read-instance-from-book\?[^"']*read_instance_id=[^"']+)["']/i);
+  return m ? decodeEntities(m[1]).replace(STORYGRAPH_BASE, '') : null;
+}
+
+export interface HtmlForm {
+  action: string;
+  fields: Record<string, string>;
+}
+
+/**
+ * The first form whose action matches, with every field's current value
+ * (hidden inputs, text inputs, and each select's selected option). Tolerates
+ * fragments delivered as escaped JavaScript (Rails .js / turbo responses).
+ */
+export function parseForm(html: string, action: RegExp): HtmlForm | null {
+  const escaped = /\\u003c|<form\b[^>]*\\"/i.test(html);
+  const src = !escaped ? html : html
+    .replace(/\\u003c/gi, '<')
+    .replace(/\\u003e/gi, '>')
+    .replace(/\\u0026/gi, '&')
+    .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'")
+    .replace(/\\\//g, '/')
+    .replace(/\\n/g, '\n');
+  for (const f of src.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+    const act = f[1].match(/action=["']([^"']*)["']/i);
+    if (!act || !action.test(decodeEntities(act[1]))) continue;
+    const attr = (tag: string, name: string) => {
+      const a = tag.match(new RegExp(`\\b${name}=["']([^"']*)["']`, 'i'));
+      return a ? decodeEntities(a[1]) : null;
+    };
+    const fields: Record<string, string> = {};
+    for (const i of f[2].matchAll(/<input\b[^>]*>/gi)) {
+      const name = attr(i[0], 'name');
+      const type = (attr(i[0], 'type') ?? 'text').toLowerCase();
+      if (!name || type === 'submit' || type === 'button') continue;
+      if ((type === 'checkbox' || type === 'radio') && !/\bchecked\b/i.test(i[0])) continue;
+      fields[name] = attr(i[0], 'value') ?? '';
+    }
+    for (const sel of f[2].matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>/gi)) {
+      const name = attr(sel[1], 'name');
+      if (!name) continue;
+      const options = [...sel[2].matchAll(/<option\b([^>]*)>/gi)];
+      const chosen = options.find((o) => /\bselected\b/i.test(o[1])) ?? options[0];
+      fields[name] = chosen ? (attr(chosen[1], 'value') ?? '') : '';
+    }
+    return { action: decodeEntities(act[1]).replace(STORYGRAPH_BASE, ''), fields };
+  }
+  return null;
+}
+
+/** Finish-date selects end in [day]/[month]/[year]; start-date ones name "start". */
+export function withFinishDate(fields: Record<string, string>, finishedAt: number): Record<string, string> | null {
+  const d = new Date(finishedAt * 1000);
+  const parts: Record<string, string> = {
+    day: String(d.getUTCDate()),
+    month: String(d.getUTCMonth() + 1),
+    year: String(d.getUTCFullYear()),
+  };
+  const out = { ...fields };
+  let set = 0;
+  for (const name of Object.keys(out)) {
+    const m = name.match(/\[(day|month|year)\]$/);
+    if (!m || /start/i.test(name)) continue;
+    out[name] = parts[m[1]];
+    set++;
+  }
+  return set === 3 ? out : null;
+}
+
 /** Page count of the edition the user tracks, from the read-status form (0 = unknown). */
 export function extractPages(html: string): number {
   const m =
@@ -219,6 +291,31 @@ const reauth = (): PushResult => ({
   error: 'StoryGraph session expired. Sign in to StoryGraph and link it again with fresh cookies.',
 });
 
+/**
+ * Date the book's latest read: open its "edit read date" form from the book page
+ * and resubmit it with the finish day/month/year replaced. Marking read itself
+ * already succeeded, so a page we can't parse is a note, not a failure.
+ */
+async function setReadDate(http: HttpTransport, c: StorygraphCred, bookId: string, finishedAt: number): Promise<PushResult> {
+  const bookPath = `/books/${bookId}`;
+  const page = await get(http, c, bookPath);
+  const unsupported = { ok: true as const, note: 'Marked read, but the read date could not be set; edit it on StoryGraph.' };
+  const bad = await classify(http, c, page.status, 'loading book page');
+  if (bad) return bad;
+  const edit = page.status === 200 ? extractReadInstanceEdit(await page.text()) : null;
+  if (!edit) return unsupported;
+  const fragment = await get(http, c, edit);
+  const badEdit = await classify(http, c, fragment.status, 'loading read date form');
+  if (badEdit) return badEdit;
+  if (fragment.status !== 200) return unsupported;
+  const form = parseForm(await fragment.text(), /\/read_instances\/\d+/);
+  const fields = form && withFinishDate(form.fields, finishedAt);
+  const token = form?.fields.authenticity_token;
+  if (!form || !fields || !token) return unsupported;
+  const r = await post(http, c, form.action, token, fields, bookPath);
+  return (await classify(http, c, r.status, 'setting read date')) ?? { ok: true };
+}
+
 async function push(cred: Credential, m: Match, ev: OutboundEvent, http: HttpTransport): Promise<PushResult> {
   const c = parseCred(cred);
   if (!c) return reauth();
@@ -239,11 +336,14 @@ async function push(cred: Credential, m: Match, ev: OutboundEvent, http: HttpTra
 
   // Finished on StoryGraph already: never downgrade or re-open it (the device
   // keeps syncing the last page). A re-read has to be started on StoryGraph.
-  if (current === 'read') return { ok: true };
+  // A backdated finish still corrects the read's date.
+  if (current === 'read') return ev.finishedAt ? setReadDate(http, c, bookId, ev.finishedAt) : { ok: true };
 
   if (finished) {
     const r = await post(http, c, `/update-status.js?book_id=${bookId}&status=read`, csrf, {}, bookPath);
-    return (await classify(http, c, r.status, 'marking read')) ?? { ok: true };
+    const bad = await classify(http, c, r.status, 'marking read');
+    if (bad) return bad;
+    return ev.finishedAt ? setReadDate(http, c, bookId, ev.finishedAt) : { ok: true };
   }
 
   if (current !== 'currently-reading') {

@@ -8,7 +8,10 @@ import { getAccount } from '../src/connectors/store.js';
 import {
   extractCsrf,
   extractPages,
+  extractReadInstanceEdit,
   extractStatus,
+  parseForm,
+  withFinishDate,
   parseSearchResults,
   storygraphConnector,
 } from '../src/connectors/storygraph.js';
@@ -237,5 +240,102 @@ describe('StoryGraph fan-out', () => {
     await drainQueue(db, site.transport, 10);
     expect(getAccount(db, 1, 'storygraph')?.status).toBe('ok');
     expect(claimReady(db, 10)).toHaveLength(0);
+  });
+});
+
+// The "edit read date" link and the fragment it opens (trimmed live shapes).
+const readBookPage = `
+<html><head><meta name="csrf-token" content="tok&#43;1" /></head><body>
+<span class="read-status-label">read</span>
+<a href="/edit-read-instance-from-book?read_instance_id=987&amp;book_id=abc-1">Click to edit read date</a>
+</body></html>`;
+const EDIT_FORM = `
+<form action="/read_instances/987" method="post">
+  <input type="hidden" name="_method" value="patch" />
+  <input type="hidden" name="authenticity_token" value="form-tok" />
+  <input type="hidden" name="book_id" value="abc-1" />
+  <select name="read_instance[start_day]"><option value="">Day</option><option value="2" selected>2</option></select>
+  <select name="read_instance[start_month]"><option value="">Month</option><option value="1" selected>1</option></select>
+  <select name="read_instance[start_year]"><option value="">Year</option><option value="2023" selected>2023</option></select>
+  <select name="read_instance[day]"><option value="">Day</option><option value="8" selected>8</option></select>
+  <select name="read_instance[month]"><option value="">Month</option><option value="10" selected>10</option></select>
+  <select name="read_instance[year]"><option value="">Year</option><option value="2026" selected>2026</option></select>
+  <input type="submit" name="commit" value="Update" />
+</form>`;
+
+describe('StoryGraph read dates', () => {
+  // 2023-06-02 12:00 UTC
+  const FINISHED_AT = 1_685_707_200;
+
+  it('finds the read-date link and parses the edit form, escaped or not', () => {
+    expect(extractReadInstanceEdit(readBookPage)).toBe('/edit-read-instance-from-book?read_instance_id=987&book_id=abc-1');
+    const form = parseForm(EDIT_FORM, /\/read_instances\/\d+/)!;
+    expect(form.action).toBe('/read_instances/987');
+    expect(form.fields).toMatchObject({ _method: 'patch', authenticity_token: 'form-tok', 'read_instance[day]': '8' });
+    expect(form.fields.commit).toBeUndefined();
+    const js = `$("#modal").html("${EDIT_FORM.replace(/"/g, '\\"').replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/\//g, '\\/').replace(/\n/g, '\\n')}");`;
+    expect(parseForm(js, /\/read_instances\/\d+/)).toEqual(form);
+  });
+
+  it('replaces only the finish date', () => {
+    const f = withFinishDate(parseForm(EDIT_FORM, /\/read_instances\/\d+/)!.fields, FINISHED_AT)!;
+    expect(f).toMatchObject({
+      'read_instance[day]': '2', 'read_instance[month]': '6', 'read_instance[year]': '2023',
+      'read_instance[start_day]': '2', 'read_instance[start_month]': '1', 'read_instance[start_year]': '2023',
+    });
+    expect(withFinishDate({ authenticity_token: 'x' }, FINISHED_AT)).toBeNull();
+  });
+
+  const push = (site: ReturnType<typeof fakeSite>, finishedAt?: number) =>
+    storygraphConnector.push(
+      COOKIES,
+      { externalId: 'abc-1', confidence: 1 },
+      { kind: 'finished', document: DOC, percentage: 1, timestamp: 1_791_460_000, ...(finishedAt ? { finishedAt } : {}) },
+      site.transport
+    );
+
+  it('marks read, then dates the read with the backdated finish', async () => {
+    const site = fakeSite();
+    site.on('GET /books/abc-1', 200, bookPage('currently reading'));
+    site.on('POST /update-status.js', 200);
+    site.on('GET /edit-read-instance-from-book', 200, EDIT_FORM);
+    site.on('POST /read_instances/987', 200);
+    // After the status post the book page shows the read and its date link.
+    const transport = site.transport;
+    let marked = false;
+    site.transport = async (url, init) => {
+      if (init.method === 'POST' && url.includes('status=read')) marked = true;
+      if (marked && init.method === 'GET' && url.endsWith('/books/abc-1')) site.on('GET /books/abc-1', 200, readBookPage);
+      return transport(url, init);
+    };
+    expect(await push(site, FINISHED_AT)).toEqual({ ok: true });
+    expect(site.posts()).toEqual(['/update-status.js?book_id=abc-1&status=read', '/read_instances/987']);
+    const call = site.calls.at(-1)!;
+    const form = new URLSearchParams(call.body);
+    expect(form.get('_method')).toBe('patch');
+    expect(form.get('authenticity_token')).toBe('form-tok');
+    expect(call.headers?.['x-csrf-token']).toBe('form-tok');
+    expect([form.get('read_instance[day]'), form.get('read_instance[month]'), form.get('read_instance[year]')]).toEqual(['2', '6', '2023']);
+    expect(form.get('read_instance[start_year]')).toBe('2023');
+  });
+
+  it('corrects the date of a book already read, and leaves it alone without a date', async () => {
+    const site = fakeSite();
+    site.on('GET /books/abc-1', 200, readBookPage);
+    site.on('GET /edit-read-instance-from-book', 200, EDIT_FORM);
+    site.on('POST /read_instances/987', 200);
+    expect(await push(site)).toEqual({ ok: true });
+    expect(site.posts()).toEqual([]);
+    expect(await push(site, FINISHED_AT)).toEqual({ ok: true });
+    expect(site.posts()).toEqual(['/read_instances/987']);
+  });
+
+  it('keeps the finish and notes it when there is no read-date form', async () => {
+    const site = fakeSite();
+    site.on('GET /books/abc-1', 200, bookPage('read'));
+    const r = await push(site, FINISHED_AT);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.note).toMatch(/read date could not be set/);
+    expect(site.posts()).toEqual([]);
   });
 });

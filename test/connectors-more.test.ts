@@ -557,6 +557,37 @@ describe('hardcover progress push', () => {
     expect(upd!.body).toContain('"finishedAt":"2025-07-31"'); // read closed
   });
 
+  it('closes the read on a backdated finish date, pulling a later start back to it', async () => {
+    const fake = fakeTransport();
+    fake.on('Ctx', 200, {
+      data: {
+        me: [{
+          user_books: [{
+            id: 10, status_id: 2, edition: { id: 5, pages: 300 },
+            user_book_reads: [{ id: 77, started_at: '2026-08-08', finished_at: null, edition: { id: 5, pages: 300 } }],
+          }],
+        }],
+        books_by_pk: {}, editions: [],
+      },
+    });
+    fake.on('UpdStatus', 200, { data: { update_user_book: { user_book: { id: 10 } } } });
+    fake.on('OpenRead', 200, {
+      data: { me: [{ user_books: [{ user_book_reads: [{ id: 77, started_at: '2026-08-08', finished_at: null, edition: { id: 5, pages: 300 } }] }] }] },
+    });
+    fake.on('UpdRead', 200, { data: { update_user_book_read: { error: null, user_book_read: { id: 77 } } } });
+
+    const r = await hardcoverConnector.push(
+      { token: 't' },
+      { externalId: '42', confidence: 1 },
+      { kind: 'finished', document: 'd', percentage: 1, timestamp: 1_791_460_000, finishedAt: 1_685_707_200 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const upd = fake.calls.find((c) => c.body?.includes('UpdRead'));
+    expect(upd!.body).toContain('"finishedAt":"2023-06-02"');
+    expect(upd!.body).toContain('"startedAt":"2023-06-02"');
+  });
+
   it('does not add another read when an already-Read book syncs again', async () => {
     const fake = fakeTransport();
     fake.on('Ctx', 200, {

@@ -88,6 +88,23 @@ export function fanOutProgress(
   );
 }
 
+/** A manual "finished" status, optionally with the date the book was really finished. */
+export function fanOutFinished(
+  db: DB,
+  userId: number,
+  document: string,
+  timestamp: number,
+  finishedAt?: number
+): void {
+  fanOut(db, userId, {
+    kind: 'finished',
+    document,
+    percentage: 1,
+    timestamp,
+    ...(finishedAt !== undefined ? { finishedAt } : {}),
+  });
+}
+
 /** Clipping columns a highlight event is built from. */
 export interface ClippingHighlightRow {
   text: string;

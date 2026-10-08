@@ -50,6 +50,22 @@ describe('computeActivity', () => {
     expect(a.days[0].books.map((b) => b.document).sort()).toEqual(['dnf', 'done']);
   });
 
+  it('a backdated manual finish beats a later logged one', () => {
+    const a = computeActivity(
+      [
+        { document: 'imported', percentage: 1, at: T + 3 * DAY },
+        { document: 'later', percentage: 1, at: T },
+      ],
+      new Map([
+        ['imported', doc(null, 'finished', T - 400 * DAY)],
+        ['later', doc(null, 'finished', T + DAY)],
+      ])
+    );
+    const by = Object.fromEntries(a.books.map((b) => [b.document, b]));
+    expect(by.imported.finished_at).toBe(T - 400 * DAY);
+    expect(by.later.finished_at).toBe(T); // marked finished after reading to the end
+  });
+
   it('buckets days in the client timezone', () => {
     const a = computeActivity(
       [
