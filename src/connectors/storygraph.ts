@@ -50,9 +50,13 @@ function headers(c: StorygraphCred, extra: Record<string, string> = {}): Record<
   };
 }
 
-async function get(http: HttpTransport, c: StorygraphCred, path: string) {
-  return http(`${STORYGRAPH_BASE}${path}`, { method: 'GET', headers: headers(c), redirect: 'manual' });
+async function get(http: HttpTransport, c: StorygraphCred, path: string, extra: Record<string, string> = {}) {
+  return http(`${STORYGRAPH_BASE}${path}`, { method: 'GET', headers: headers(c, extra), redirect: 'manual' });
 }
+
+// The read-date form only comes back as a Turbo Stream; a plain HTML request is
+// redirected to "add a new read" instead (verified live, Oct 2026).
+const TURBO_ACCEPT = { accept: 'text/vnd.turbo-stream.html, text/html, application/xhtml+xml' };
 
 /** A Rails XHR form post, as the site's own JavaScript sends it. */
 async function post(
@@ -304,7 +308,7 @@ async function setReadDate(http: HttpTransport, c: StorygraphCred, bookId: strin
   if (bad) return bad;
   const edit = page.status === 200 ? extractReadInstanceEdit(await page.text()) : null;
   if (!edit) return unsupported;
-  const fragment = await get(http, c, edit);
+  const fragment = await get(http, c, edit, TURBO_ACCEPT);
   const badEdit = await classify(http, c, fragment.status, 'loading read date form');
   if (badEdit) return badEdit;
   if (fragment.status !== 200) return unsupported;
