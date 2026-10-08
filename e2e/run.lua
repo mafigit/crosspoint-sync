@@ -98,7 +98,28 @@ curl("PUT", "/api/v1/clippings/" .. DOC, { items = { { id = "feedfacefeedface", 
 check(B:sync(true), "B syncs with an unplaceable clipping")
 check(B.ui.doc_settings:readSetting("crosspoint_clippings").unresolved["feedfacefeedface"] ~= nil, "unplaceable clipping kept for retry")
 
+-- CrossInk clippings KOReader's literal search can't find in one go
+local function crossinkClip(id, spine, text) return { id = id, spine = spine, text = text, created_at = 340 } end
+curl("PUT", "/api/v1/clippings/" .. DOC, { items = {
+  -- spans two paragraphs (CrossInk joins them with a newline; the search does not cross paragraphs)
+  crossinkClip("a1a1a1a1a1a1a1a1", 2, "harbour was quiet.\nSecond paragraph starts here"),
+  -- the book has a non-breaking space where CrossInk's text has a plain one
+  crossinkClip("b2b2b2b2b2b2b2b2", 2, "The ship sailed at dawn"),
+  -- the reader's spine index is off from KOReader's fragments
+  crossinkClip("c3c3c3c3c3c3c3c3", 0, "Whereof one cannot speak"),
+} })
+local C, uiC = newDevice("C")
+check(C:sync(true), "C syncs CrossInk clippings")
+local multi = find(uiC, "harbour was quiet.\nSecond paragraph starts here")
+check(multi and multi.pos0 == M.xp(3, 1, 33) and multi.pos1 == M.xp(3, 2, 28), "C placed a clipping across two paragraphs")
+local nbsp = find(uiC, "The ship sailed at dawn")
+check(nbsp and nbsp.pos0 == M.xp(3, 1, 0) and nbsp.pos1 == M.xp(3, 1, 24), "C placed a clipping over a non-breaking space")
+local shifted = find(uiC, "Whereof one cannot speak")
+check(shifted and shifted.pos0 == M.xp(2, 3, 0), "C placed a clipping whose spine index is off")
+check(multi.datetime:sub(1, 4) ~= "1970", "a clipping stamped with seconds since boot is not dated 1970")
+
 -- Idempotence: another sync changes nothing
+check(B:sync(true), "B catches up with the CrossInk clippings")
 local before = #uiB.annotation.annotations
 check(B:sync(true) and #uiB.annotation.annotations == before, "repeat sync is idempotent")
 print("ALL PASSED")

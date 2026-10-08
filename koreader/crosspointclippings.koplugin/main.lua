@@ -175,7 +175,13 @@ Use the same matching method (binary is recommended) on every device, KOReader a
 end
 
 function CrossPointClippings:onReaderReady()
-    if self.settings:isTrue("sync_on_open") and NetworkMgr:isOnline() then
+    if not self.settings:isTrue("sync_on_open") then return end
+    -- WiFi is usually off when a book opens (Kindle): bring it up per the user's WiFi setting and sync then,
+    -- as Progress sync does, instead of skipping the sync.
+    if NetworkMgr.willRerunWhenOnline and NetworkMgr:willRerunWhenOnline(function() self:onReaderReady() end) then
+        return
+    end
+    if NetworkMgr:isOnline() then
         UIManager:nextTick(function() self:sync(false) end)
     end
 end
@@ -280,48 +286,79 @@ function CrossPointClippings:search(pattern)
     return self._search_cache[pattern]
 end
 
---- Finds the clipping's text inside its chapter. Returns pos0, pos1 or nil.
+-- Search patterns for one end of a clipping: up to 6 words from its first (or last) paragraph, longest first.
+-- CrossInk ends a paragraph with "\n", and KOReader's search does not cross paragraphs. Shorter patterns step
+-- around what a literal search misses: CrossInk turns non-breaking spaces into plain spaces, for one.
+local function endPatterns(text, from_end)
+    local paragraphs = {}
+    for line in text:gmatch("[^\n]+") do
+        if line:find("%S") then table.insert(paragraphs, line) end
+    end
+    local words = splitWords(paragraphs[from_end and #paragraphs or 1] or "")
+    local patterns = {}
+    for n = math.min(6, #words), 1, -1 do
+        if from_end then
+            table.insert(patterns, table.concat(words, " ", #words - n + 1, #words))
+        else
+            table.insert(patterns, table.concat(words, " ", 1, n))
+        end
+    end
+    return patterns
+end
+
+--- Finds the clipping's text, in its chapter first, then anywhere in the book (the reader's spine index can be
+--- off from KOReader's DocFragment numbering, e.g. around non-linear items). Returns pos0, pos1 or nil.
 function CrossPointClippings:locate(r)
     local text = nn(r.text)
-    if not text or text == "" then return end
+    if not text or not text:find("%S") then return end
     local doc = self.ui.document
-    local words = splitWords(text)
-    if #words == 0 then return end
-    local n = math.min(6, #words)
-    local head = table.concat(words, " ", 1, n)
-    local tail = table.concat(words, " ", #words - n + 1, #words)
+    local want = normalize(text)
+    if want == "" then return end
+    local heads, tails = endPatterns(text, false), endPatterns(text, true)
     local spine = tonumber(nn(r.spine))
     local frag = spine and ("/body/DocFragment[" .. (spine + 1) .. "]/") or nil
-    local want = normalize(text)
 
-    local function inFrag(xp)
-        return not frag or xp:sub(1, #frag) == frag
+    local function matches(s, e)
+        local got = doc:getTextFromXPointers(s, e)
+        return got and normalize(got) == want, got and #normalize(got) > #want
     end
 
-    for _, h in ipairs(self:search(head)) do
-        if h.start and inFrag(h.start) then
-            local candidates
-            if #words <= n then
-                candidates = { h["end"] }
-            else
-                candidates = {}
-                for _, t in ipairs(self:search(tail)) do
-                    if t["end"] and doc:compareXPointers(h.start, t["end"]) == 1 then
-                        table.insert(candidates, t["end"])
+    local ends = {}
+    local function sortedEnds(pattern)
+        if not ends[pattern] then
+            local list = {}
+            for _, t in ipairs(self:search(pattern)) do
+                if t["end"] then table.insert(list, t["end"]) end
+            end
+            table.sort(list, function(a, b) return doc:compareXPointers(a, b) == 1 end)
+            ends[pattern] = list
+        end
+        return ends[pattern]
+    end
+
+    local function find(in_frag)
+        for _, head in ipairs(heads) do
+            for _, h in ipairs(self:search(head)) do
+                if h.start and (not in_frag or h.start:sub(1, #in_frag) == in_frag) then
+                    if h["end"] and matches(h.start, h["end"]) then return h.start, h["end"] end
+                    for _, tail in ipairs(tails) do
+                        -- nearest end after the start first; past the clipping's length no later end can match
+                        for _, e in ipairs(sortedEnds(tail)) do
+                            if doc:compareXPointers(h.start, e) == 1 then
+                                local ok, too_long = matches(h.start, e)
+                                if ok then return h.start, e end
+                                if too_long then break end
+                            end
+                        end
                     end
                 end
-                -- nearest end first
-                table.sort(candidates, function(a, b) return doc:compareXPointers(a, b) == 1 end)
-            end
-            for _, e in ipairs(candidates) do
-                local got = doc:getTextFromXPointers(h.start, e)
-                if got and normalize(got) == want then
-                    return h.start, e
-                end
-                if got and #normalize(got) > #want then break end
             end
         end
     end
+
+    local pos0, pos1 = find(frag)
+    if not pos0 and frag then pos0, pos1 = find(nil) end
+    return pos0, pos1
 end
 
 function CrossPointClippings:addLocal(r, pos0, pos1)
@@ -333,7 +370,8 @@ function CrossPointClippings:addLocal(r, pos0, pos1)
         text = nn(r.text),
         note = nn(r.note),
         chapter = nn(r.chapter) or self.ui.toc:getTocTitleByPage(pos0),
-        datetime = os.date("%Y-%m-%d %H:%M:%S", tonumber(nn(r.created_at)) or os.time()),
+        -- Older CrossInk firmware sent seconds since boot: date those by their arrival instead of 1970.
+        datetime = os.date("%Y-%m-%d %H:%M:%S", (tonumber(nn(r.created_at)) or 0) >= 978307200 and r.created_at or os.time()),
         drawer = self.view.highlight.saved_drawer or "lighten",
         color = KNOWN_COLORS[color] and color or self.view.highlight.saved_color,
         cps_id = r.id,

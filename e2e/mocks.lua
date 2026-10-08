@@ -14,7 +14,8 @@ mod("ui/widget/notification", Widget)
 mod("ui/uimanager", {
   show = function(_, w) table.insert(M.shown, w.text) end, close = function() end,
   forceRePaint = function() end, setDirty = function() end, nextTick = function(_, f) f() end })
-mod("ui/network/manager", { isOnline = function() return true end, runWhenOnline = function(_, f) f() end })
+mod("ui/network/manager", { isOnline = function() return true end, runWhenOnline = function(_, f) f() end,
+  willRerunWhenOnline = function() return false end })
 local Settings = {}
 Settings.__index = Settings
 function Settings:readSetting(k) return self.data[k] end
@@ -37,6 +38,8 @@ M.book = {
   { "Chapter one begins here.", "It was a bright cold day in April, and the clocks were striking thirteen." },
   { "Chapter two.", "So we beat on, boats against the current, borne back ceaselessly into the past.",
     "Whereof one cannot speak, thereof one must be silent." },
+  { "The ship\194\160sailed at dawn and the harbour was quiet.",
+    "Second paragraph starts here and goes on for a while longer than six words." },
 }
 local function xp(f, p, o) return string.format("/body/DocFragment[%d]/body/p[%d]/text().%d", f, p, o) end
 local function parse(x)
