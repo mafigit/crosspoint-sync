@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { withTransaction, type DB } from '../../db/db.js';
 import { kosyncError, type AppEnv } from '../../auth/middleware.js';
 import { isValidDocument } from '../kosync.js';
+import { resolveDocument } from '../../models/merge.js';
 import { isItemId, nowSeconds, parseListParams } from '../../models/sync.js';
 
 const MAX_BATCH = 50;
@@ -28,10 +29,12 @@ export function bookmarkRoutes(db: DB): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   app.get('/bookmarks/:document', (c) => {
-    const document = c.req.param('document');
-    if (!isValidDocument(document)) {
+    const param = c.req.param('document');
+    if (!isValidDocument(param)) {
       return kosyncError(c, 403, 2004, "Field 'document' not provided.");
     }
+    // A merged book's old hash (a device still sends it) lands on the canonical document.
+    const document = resolveDocument(db, c.get('user').id, param);
     const user = c.get('user');
     const { since, limit } = parseListParams(c);
     const rows = db
@@ -63,10 +66,12 @@ export function bookmarkRoutes(db: DB): Hono<AppEnv> {
   });
 
   app.put('/bookmarks/:document', async (c) => {
-    const document = c.req.param('document');
-    if (!isValidDocument(document)) {
+    const param = c.req.param('document');
+    if (!isValidDocument(param)) {
       return kosyncError(c, 403, 2004, "Field 'document' not provided.");
     }
+    // A merged book's old hash (a device still sends it) lands on the canonical document.
+    const document = resolveDocument(db, c.get('user').id, param);
     let body: unknown;
     try {
       body = await c.req.json();

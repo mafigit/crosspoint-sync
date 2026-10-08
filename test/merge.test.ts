@@ -51,6 +51,24 @@ describe('document merge', () => {
     expect(items[0].aliases).toEqual([KOBO_DOC]);
   });
 
+  it('files clippings sent under the alias hash on the merged book', async () => {
+    const { app, headers } = await setup();
+    const clip = { id: 'c0ffee0011223344', spine: 7, text: 'Sent by a device that still uses the old hash.', created_at: 1752300000 };
+    const put = await app.request(`/api/v1/clippings/${KOBO_DOC}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ items: [clip] }),
+    });
+    expect(put.status).toBe(200);
+    const all = (await (await app.request('/api/v1/clippings', { headers })).json()) as { items: Record<string, unknown>[] };
+    expect(all.items.map((c) => c.document)).toEqual([CP_DOC]);
+    // The device reads them back under the hash it knows.
+    const mine = (await (await app.request(`/api/v1/clippings/${KOBO_DOC}?cursor=0`, { headers })).json()) as {
+      items: Record<string, unknown>[];
+    };
+    expect(mine.items.map((c) => c.id)).toEqual([clip.id]);
+  });
+
   it('serves the merged progress when asked for the alias hash', async () => {
     const { app, headers } = await setup();
     const res = await app.request(`/syncs/progress/${KOBO_DOC}`, { headers });
