@@ -34,6 +34,7 @@ local _ = require("gettext")
 
 local STATE_KEY = "crosspoint_clippings"
 local PAGE_LIMIT = 100
+local DEBOUNCE_SECONDS = 25 -- skip a sleep/wake sync this soon after the last one (as Progress sync does)
 local BATCH = 50
 local MAX_TEXT = 4096
 local KNOWN_COLORS = {
@@ -153,6 +154,11 @@ function CrossPointClippings:addToMainMenu(menu_items)
                 callback = function() self.settings:flipNilOrFalse("sync_on_close"); self.settings:flush() end,
             },
             {
+                text = _("Sync on sleep and wake"),
+                checked_func = function() return self.settings:isTrue("sync_on_suspend_resume") end,
+                callback = function() self.settings:flipNilOrFalse("sync_on_suspend_resume"); self.settings:flush() end,
+            },
+            {
                 text = _("Reset sync state for this book"),
                 keep_menu_open = true,
                 separator = true,
@@ -193,6 +199,46 @@ function CrossPointClippings:onCloseDocument()
             self.ui.doc_settings:saveSetting("annotations", self.ui.annotation.annotations)
             self.ui.doc_settings:flush()
         end
+    end
+end
+
+-- Sleep/wake: Progress sync's auto sync usually brings WiFi up at the same moment. NetworkMgr
+-- only honours the first pending connection request and drops the second callback, so we mark the
+-- sync as pending and also run it from NetworkConnected, whoever started the connection.
+function CrossPointClippings:requestBackgroundSync()
+    if not self.settings:isTrue("sync_on_suspend_resume") then return end
+    local now = os.time()
+    if self.last_bg_sync and now - self.last_bg_sync < DEBOUNCE_SECONDS then return end
+    self.pending_bg_sync = true
+    if NetworkMgr:isOnline() then
+        self:runPendingSync()
+    elseif not (Device:hasWifiRestore() and NetworkMgr.wifi_was_on and G_reader_settings:isTrue("auto_restore_wifi")) then
+        -- With WiFi restore on resume, NetworkConnected follows on its own; otherwise ask for WiFi.
+        NetworkMgr:willRerunWhenOnline(function() self:runPendingSync() end)
+    end
+end
+
+function CrossPointClippings:runPendingSync()
+    if not self.pending_bg_sync or not self.ui.document then return end
+    self.pending_bg_sync = false
+    self.last_bg_sync = os.time()
+    if self:sync(false) then
+        -- Persist placed clippings right away: the device may stay asleep for a long time.
+        self.ui:saveSettings()
+    end
+end
+
+function CrossPointClippings:onSuspend()
+    self:requestBackgroundSync()
+end
+
+function CrossPointClippings:onResume()
+    UIManager:scheduleIn(1, function() self:requestBackgroundSync() end)
+end
+
+function CrossPointClippings:onNetworkConnected()
+    if self.pending_bg_sync then
+        UIManager:scheduleIn(0.5, function() self:runPendingSync() end)
     end
 end
 

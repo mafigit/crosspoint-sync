@@ -8,7 +8,7 @@ Copy the `crosspointclippings.koplugin` folder into `koreader/plugins/` (Kindle:
 ## Setup
 1. Tools → Progress sync → Custom sync server → your server URL. Log in.
 2. Progress sync → Document matching method → **Binary** (same on every device, CrossPoint too).
-3. Open a book → Tools → CrossPoint clippings → Sync clippings now. Optionally enable sync on open/close.
+3. Open a book → Tools → CrossPoint clippings → Sync clippings now. Optionally enable sync on open/close and on sleep/wake (works alongside Progress sync auto sync).
 
 ## How it works
 - Uploads KOReader highlights with spine + text, plus exact xpointers (needs the forked server; detected via /healthz).

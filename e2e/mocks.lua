@@ -5,7 +5,7 @@ local function mod(name, v) package.preload[name] = function() return v end end
 
 mod("rapidjson", { null = cjson.null, encode = cjson.encode, decode = function(s) local ok, v = pcall(cjson.decode, s); return ok and v or nil end })
 mod("datastorage", { getSettingsDir = function() return "/tmp/kosettings" end })
-mod("device", {})
+mod("device", { hasWifiRestore = function() return false end })
 mod("ui/event", { new = function(_, name, args) return { name = name, args = args } end })
 M.shown = {}
 local Widget = { new = function(cls, o) return o end }
@@ -13,9 +13,12 @@ mod("ui/widget/infomessage", Widget)
 mod("ui/widget/notification", Widget)
 mod("ui/uimanager", {
   show = function(_, w) table.insert(M.shown, w.text) end, close = function() end,
-  forceRePaint = function() end, setDirty = function() end, nextTick = function(_, f) f() end })
-mod("ui/network/manager", { isOnline = function() return true end, runWhenOnline = function(_, f) f() end,
-  willRerunWhenOnline = function() return false end })
+  forceRePaint = function() end, setDirty = function() end, nextTick = function(_, f) f() end,
+  scheduleIn = function(_, _, f) f() end })
+-- M.offline simulates WiFi off; M.wifi_requests counts connection requests.
+M.offline, M.wifi_requests = false, 0
+mod("ui/network/manager", { isOnline = function() return not M.offline end, runWhenOnline = function(_, f) f() end,
+  willRerunWhenOnline = function() if M.offline then M.wifi_requests = M.wifi_requests + 1; return true end; return false end })
 local Settings = {}
 Settings.__index = Settings
 function Settings:readSetting(k) return self.data[k] end
@@ -26,6 +29,7 @@ function Settings:flipNilOrFalse(k) self.data[k] = not self.data[k] end
 function Settings:flush() end
 M.newSettings = function() return setmetatable({ data = {} }, Settings) end
 mod("luasettings", { open = function() return M.newSettings() end })
+G_reader_settings = M.newSettings()
 mod("ui/widget/container/widgetcontainer", { extend = function(_, o) o.__index = o; o.new = function(cls, inst) return setmetatable(inst, cls) end; return o end })
 mod("logger", { warn = function(...) print("WARN", ...) end, info = function() end, dbg = function() end })
 mod("socketutil", { set_timeout = function() end, reset_timeout = function() end, LARGE_BLOCK_TIMEOUT = 10, LARGE_TOTAL_TIMEOUT = 30 })

@@ -122,5 +122,26 @@ check(multi.datetime:sub(1, 4) ~= "1970", "a clipping stamped with seconds since
 check(B:sync(true), "B catches up with the CrossInk clippings")
 local before = #uiB.annotation.annotations
 check(B:sync(true) and #uiB.annotation.annotations == before, "repeat sync is idempotent")
+-- Sleep/wake: off by default; when on, an offline sleep asks for WiFi and syncs once connected
+local W, uiW = newDevice("W")
+local srv_before = #curl("GET", "/api/v1/clippings/" .. DOC).items
+W:onSuspend()
+check(#uiW.annotation.annotations == 0, "sleep/wake sync is off by default")
+W.settings:saveSetting("sync_on_suspend_resume", true)
+M.offline = true
+W:onSuspend()
+check(M.wifi_requests == 1 and W.pending_bg_sync and #uiW.annotation.annotations == 0, "offline sleep requests WiFi and waits")
+M.offline = false
+local saved = 0
+function uiW:saveSettings() saved = saved + 1 end
+W:onNetworkConnected()
+check(not W.pending_bg_sync and #uiW.annotation.annotations > 0 and saved == 1, "sync runs once WiFi is connected and saves")
+local n = #uiW.annotation.annotations
+W:onResume()
+check(saved == 1 and #uiW.annotation.annotations == n, "wake right after sleep is debounced")
+W.last_bg_sync = os.time() - 60
+W:onResume()
+check(saved == 2, "wake syncs when online")
+check(#curl("GET", "/api/v1/clippings/" .. DOC).items == srv_before, "background syncs upload nothing new")
 print("ALL PASSED")
 for _, t in ipairs(M.shown) do print("  ui:", t) end
