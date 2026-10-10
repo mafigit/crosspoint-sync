@@ -207,9 +207,27 @@ function LinkForm({ session, conn, onLinked }) {
           autoCapitalize="none"
         />
         <input className={`${field} font-mono`} type="password" placeholder="API key" value={v.token ?? ''} onChange={set('token')} autoComplete="off" />
+        <details className="text-sm text-stone-600">
+          <summary className="cursor-pointer py-1 font-medium text-stone-700">Extra headers (auth proxy)</summary>
+          <p className="mt-1 mb-2 text-xs text-stone-500">
+            Sent with every request, one <code>Name: value</code> per line. For Pangolin, use a share link&rsquo;s{' '}
+            <code>P-Access-Token-Id</code> and <code>P-Access-Token</code>.
+          </p>
+          <textarea
+            className={`${field.replace('h-11 ', '')} py-2 font-mono`}
+            rows={3}
+            placeholder={'P-Access-Token-Id: …\nP-Access-Token: …'}
+            value={v.headers ?? ''}
+            onChange={set('headers')}
+            autoCapitalize="none"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </details>
         {submit('Connect', () => ({
           server: (v.server ?? '').trim(),
           token: (v.token ?? '').trim(),
+          headers: v.headers ?? '',
         }))}
       </form>
     )
