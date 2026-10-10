@@ -34,6 +34,8 @@ export interface ProgressUpsert {
   position: string | null;
   metadata: DocumentMetadata | null;
   updatedAt: number;
+  /** Store `position` as given, even null. By default a missing position keeps the stored one. */
+  replacePosition?: boolean;
 }
 
 /** Optional document metadata sent by CrossPoint/KOReader (KOReader PR #15306). */
@@ -143,8 +145,10 @@ export function nearestProgressSample(
   db: DB,
   userId: number,
   document: string,
-  pct: number
+  pct: number,
+  maxDistance = Infinity
 ): { progress: string; position: string | null; percentage: number } | null {
+  const target = Math.max(0, Math.min(1, pct));
   const row = db
     .prepare(
       `SELECT progress, position, percentage
@@ -153,10 +157,11 @@ export function nearestProgressSample(
        ORDER BY ABS(percentage - ?) ASC
        LIMIT 1`
     )
-    .get(userId, document, Math.max(0, Math.min(1, pct))) as
+    .get(userId, document, target) as
     | { progress: string; position: string | null; percentage: number }
     | undefined;
-  return row ?? null;
+  if (!row || Math.abs(row.percentage - target) > maxDistance) return null;
+  return row;
 }
 
 export function upsertProgress(db: DB, p: ProgressUpsert): void {
@@ -180,9 +185,9 @@ export function upsertProgress(db: DB, p: ProgressUpsert): void {
        device = excluded.device,
        percentage = excluded.percentage,
        progress = excluded.progress,
-       position = COALESCE(excluded.position, progress.position),
+       position = CASE WHEN ? THEN excluded.position ELSE COALESCE(excluded.position, progress.position) END,
        updated_at = excluded.updated_at`
-  ).run(p.userId, p.document, p.deviceId, p.device, p.percentage, p.progress, p.position, p.updatedAt);
+  ).run(p.userId, p.document, p.deviceId, p.device, p.percentage, p.progress, p.position, p.updatedAt, p.replacePosition ? 1 : 0);
   if (p.metadata) {
     upsertDocumentMetadata(db, p.userId, p.document, p.metadata, p.updatedAt);
     // Exact service ids from the plugin sidecar bypass fuzzy matching: seed the

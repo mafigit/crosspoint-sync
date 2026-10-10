@@ -21,6 +21,10 @@ import { ConnectorOperationError, type InboundChange, type HttpTransport } from 
 // (within this window). This suppresses the echo of a value we just pushed OUT
 // to the same service, so read->push->pull doesn't loop.
 const ECHO_EPSILON = 0.005;
+// A percentage-only change borrows a recorded reader position only this close to
+// it. A farther one would send the reader to the wrong place (pctQ is
+// authoritative on CrossPoint); without one the reader seeks by percentage.
+const SAMPLE_MAX_DISTANCE = 0.01;
 
 /**
  * Pull position changes from one connector and apply them to canonical progress.
@@ -56,12 +60,12 @@ export async function pollConnector(
       (!exact || current.progress.replace(/\[1\]/g, '') === ch.progress!.replace(/\[1\]/g, ''));
     if (samePosition && !exact) return 0;
     // Percentage-only providers use recorded samples; exact providers never borrow a stale page.
-    const sample = exact ? null : nearestProgressSample(db, userId, document, pct);
+    const sample = exact ? null : nearestProgressSample(db, userId, document, pct, SAMPLE_MAX_DISTANCE);
     const progress = ch.progress ?? sample?.progress ?? `${connectorId}:${Math.round(pct * 1_000_000)}`;
     const position = sample?.position ?? null;
     upsertProgress(db, {
       userId, document, deviceId: connectorId, device: conn!.displayName,
-      percentage: pct, progress, position, metadata: null, updatedAt,
+      percentage: pct, progress, position, metadata: null, updatedAt, replacePosition: !exact,
     });
     if (exact) recordProgressSample(db, userId, document, pct, progress, null, updatedAt);
     if (samePosition) return 0; // Remember the source timestamp without echoing our own push.

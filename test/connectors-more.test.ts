@@ -305,7 +305,7 @@ describe('audiobookshelf fan-in (audiobook -> ebook)', () => {
     expect(targets).not.toContain('audiobookshelf');
   });
 
-  it('maps a percentage-only fan-in to the nearest real device position (not a synthetic string)', async () => {
+  it('borrows a nearby real device position for a percentage-only fan-in, never a far one', async () => {
     const fake = fakeTransport();
     fake.on('/api/me', 200, { username: 'julia' });
     const { app, db } = makeTestApp({}, { connectorTransport: fake.transport });
@@ -315,24 +315,35 @@ describe('audiobookshelf fan-in (audiobook -> ebook)', () => {
       method: 'PUT', headers, body: JSON.stringify({ credential: { server: 'abs.test', token: 'k' } }),
     });
     saveMatch(db, userId, 'audiobookshelf', DOC, { externalId: 'li_1', confidence: 1 }, 'manual');
-    // A real KOReader device pushed an xpointer at ~38%; ABS advances to 62%.
+    // A real reader pushed an xpointer and rich position at ~61.5%.
     const XPOINTER = '/body/DocFragment[11]/body/div[1]/p[3]';
     await app.request('/syncs/progress', {
       method: 'PUT', headers,
-      body: JSON.stringify({ document: DOC, progress: XPOINTER, percentage: 0.38, device_id: 'kindle' }),
+      body: JSON.stringify({
+        document: DOC, progress: XPOINTER, percentage: 0.615, device_id: 'reader',
+        position: { pctQ: 615000, spine: 10, page: 3, pages: 20 },
+      }),
     });
+    const absRow = () => db.prepare("SELECT progress, position FROM progress WHERE device_id = 'audiobookshelf'").get() as
+      { progress: string; position: string | null };
+
+    // ABS at 62%: close enough, so the reader gets a real xpointer it can seek to.
     fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.62, isFinished: false, lastUpdate: Date.now() + 60_000, episodeId: null }] });
-    db.prepare('DELETE FROM connector_queue').run();
-
-    const applied = await pollConnector(db, userId, 'audiobookshelf', fake.transport);
-    expect(applied).toBe(1);
-
-    // The pulled progress carries the real xpointer (nearest sample), so stock
-    // KOReader can seek to it, while percentage reflects the audiobook position.
-    const got = await (await app.request(`/syncs/progress/${DOC}`, { headers })).json();
+    expect(await pollConnector(db, userId, 'audiobookshelf', fake.transport)).toBe(1);
+    let got = await (await app.request(`/syncs/progress/${DOC}`, { headers })).json();
     expect(got.percentage).toBe(0.62);
     expect(got.progress).toBe(XPOINTER);
-    expect(got.progress).not.toContain('audiobookshelf:');
+    expect(JSON.parse(absRow().position!).pctQ).toBe(615000);
+
+    // ABS moves on to 80%: the 61.5% position would send the reader back, so the
+    // reader gets only the percentage, and the earlier borrowed position is gone.
+    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.8, isFinished: false, lastUpdate: Date.now() + 120_000, episodeId: null }] });
+    expect(await pollConnector(db, userId, 'audiobookshelf', fake.transport)).toBe(1);
+    got = await (await app.request(`/syncs/progress/${DOC}`, { headers })).json();
+    expect(got.percentage).toBe(0.8);
+    expect(got.progress).not.toBe(XPOINTER);
+    expect(got.progress.startsWith('/')).toBe(false);
+    expect(absRow().position).toBeNull();
   });
 
   it('epsilon-suppresses an echo of our own pushed value', async () => {
