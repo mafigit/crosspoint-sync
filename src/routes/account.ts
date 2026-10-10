@@ -5,7 +5,7 @@ import { withTransaction, type DB } from '../db/db.js';
 import type { Config } from '../config.js';
 import { masterAuth, type AppEnv } from '../auth/middleware.js';
 import { hashKey, verifyKey } from '../auth/password.js';
-import { invalidateAuthCache } from '../auth/middleware.js';
+import { guardOf, invalidateAuthCache, tooManyAttempts } from '../auth/middleware.js';
 import { SESSION_COOKIE } from '../auth/session.js';
 import { nowSeconds } from '../models/sync.js';
 import { USERNAME_RE } from './kosync.js';
@@ -112,13 +112,18 @@ export function accountRoutes(db: DB, config: Config): Hono<AppEnv> {
     if (!username || !password) {
       return c.json({ error: 'Username and password required' }, 400);
     }
+    const guard = guardOf(c);
+    const ip = guard.ipOf(c);
+    if (guard.failures.blocked(ip, username)) return tooManyAttempts(c);
     const row = db
       .prepare('SELECT id, key_hash, account_id FROM users WHERE username = ?')
       .get(username) as { id: number; key_hash: string; account_id: number | null } | undefined;
     // The device sends MD5(password); the web form takes the plain password.
     if (!row || !verifyKey(md5(password), row.key_hash)) {
+      guard.failures.fail(ip, username);
       return c.json({ error: 'Invalid sync account credentials' }, 401);
     }
+    guard.failures.succeed(username);
     if (row.account_id && row.account_id !== account.id) {
       return c.json({ error: 'That sync account is linked to another login' }, 409);
     }

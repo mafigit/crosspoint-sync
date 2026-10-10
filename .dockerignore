@@ -12,3 +12,11 @@ app/node_modules
 app/dist
 koreader
 e2e
+# Local data and secrets never belong in the build context.
+kindle_export
+.localdata
+*.db
+*.db-*
+.env
+.env.*
+.github

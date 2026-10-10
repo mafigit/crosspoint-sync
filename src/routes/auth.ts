@@ -5,7 +5,7 @@ import type { DB } from '../db/db.js';
 import type { Config } from '../config.js';
 import type { AppEnv } from '../auth/middleware.js';
 import { hashKey, verifyKey } from '../auth/password.js';
-import { rateLimiter } from '../auth/middleware.js';
+import { guardOf, rateLimiter, tooManyAttempts } from '../auth/middleware.js';
 import {
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
@@ -92,12 +92,18 @@ export function authRoutes(db: DB, config: Config): Hono<AppEnv> {
     const parsed = token?.match(TOKEN_RE);
     if (!token || !parsed) return c.json({ error: 'Invalid token' }, 401);
     const accountId = Number(parsed[1]);
+    const guard = guardOf(c);
+    const ip = guard.ipOf(c);
+    const who = `account:${accountId}`;
+    if (guard.failures.blocked(ip, who)) return tooManyAttempts(c);
     const row = db
       .prepare('SELECT token_hash FROM accounts WHERE id = ?')
       .get(accountId) as { token_hash: string } | undefined;
     if (!row || !verifyKey(md5(token), row.token_hash)) {
+      guard.failures.fail(ip, who);
       return c.json({ error: 'Invalid token' }, 401);
     }
+    guard.failures.succeed(who);
     setSessionCookie(c, accountId);
     return c.json({ ok: true });
   });
@@ -120,12 +126,17 @@ export function authRoutes(db: DB, config: Config): Hono<AppEnv> {
     if (!username || !password) {
       return c.json({ error: 'Username and password required' }, 400);
     }
+    const guard = guardOf(c);
+    const ip = guard.ipOf(c);
+    if (guard.failures.blocked(ip, username)) return tooManyAttempts(c);
     const row = db
       .prepare('SELECT id, account_id, key_hash FROM users WHERE username = ?')
       .get(username) as { id: number; account_id: number | null; key_hash: string } | undefined;
     if (!row || !verifyKey(md5(password), row.key_hash)) {
+      guard.failures.fail(ip, username);
       return c.json({ error: 'Invalid sync account credentials' }, 401);
     }
+    guard.failures.succeed(username);
     let accountId = row.account_id;
     if (!accountId) {
       // Claim: create a master account for this sync identity and link it.

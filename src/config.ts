@@ -2,8 +2,13 @@ export interface Config {
   registrationDisabled: boolean;
   /** Max requests per IP per minute on sensitive endpoints (0 = disabled). */
   authRateLimitPerMinute: number;
-  /** Trust the deployment's reverse proxy to set X-Forwarded-Proto. */
+  /** Trust the deployment's reverse proxy to set X-Forwarded-Proto and X-Forwarded-For. */
   trustProxy: boolean;
+  /**
+   * Header a trusted proxy always sets to the real client IP (e.g. cf-connecting-ip
+   * behind Cloudflare). Never read unless configured: clients can send any header.
+   */
+  clientIpHeader: string | null;
   /**
    * Origins allowed to call the sync API from a browser. '*' (the default)
    *   is safe because the API authenticates with headers, not cookies, so
@@ -29,6 +34,7 @@ export function fromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     trustProxy: env.TRUST_PROXY
       ? env.TRUST_PROXY === 'true' || env.TRUST_PROXY === '1'
       : Boolean(env.RAILWAY_ENVIRONMENT),
+    clientIpHeader: env.CLIENT_IP_HEADER?.trim().toLowerCase() || null,
     corsOrigins: env.CORS_ORIGINS
       ? env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
       : '*',

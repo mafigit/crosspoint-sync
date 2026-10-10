@@ -1,9 +1,11 @@
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import type { DB } from './db/db.js';
 import type { Config } from './config.js';
-import { sessionOrKeyAuth, type AppEnv } from './auth/middleware.js';
+import { csrfGuard } from './auth/csrf.js';
+import { authGuardMiddleware, createAuthGuard, sessionOrKeyAuth, type AppEnv } from './auth/middleware.js';
 import { kosyncRoutes } from './routes/kosync.js';
 import { meRoutes } from './routes/v1/me.js';
 import { authRoutes } from './routes/auth.js';
@@ -22,6 +24,8 @@ import type { HttpTransport } from './connectors/types.js';
 // Injected at build time via package.json; read lazily to keep this file dependency-free.
 export const VERSION = process.env.npm_package_version ?? '0.1.0';
 
+export const MAX_BODY_BYTES = 2 * 1024 * 1024;
+
 export interface AppOptions {
   /** Override the connector HTTP transport (tests inject a fake). */
   connectorTransport?: HttpTransport;
@@ -30,6 +34,14 @@ export interface AppOptions {
 export function createApp(db: DB, config: Config, opts: AppOptions = {}): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const refreshProgress = createProgressRefresh(db, opts.connectorTransport);
+  app.use('*', authGuardMiddleware(createAuthGuard(config)));
+  // Every handler buffers its JSON body; cap it well above the largest legitimate
+  // batch (50 full-size clippings, a Kindle credential with its library list).
+  app.use('*', bodyLimit({
+    maxSize: MAX_BODY_BYTES,
+    onError: (c) => c.json({ code: 2003, message: 'Request body too large' }, 413),
+  }));
+  app.use('*', csrfGuard(config.trustProxy));
 
   // CORS for browser-based kosync clients (PWAs, WebView readers). Applied only
   // to the header-authenticated API surfaces - never to the cookie-based web UI
