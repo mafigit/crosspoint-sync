@@ -21,18 +21,60 @@ import type {
  * `currentTime / duration`, so we map ebook% -> currentTime = pct * duration.
  * This is approximate (text position != audio time) but lands you at roughly
  * the right spot. Verified against api.audiobookshelf.org + the ABS source.
+ *
+ * Optional extra headers are sent with every request, for servers behind an
+ * auth proxy (e.g. Pangolin's P-Access-Token-Id / P-Access-Token).
  */
 
 interface AbsCred extends Credential {
   server: string;
   token: string;
+  headers: Record<string, string>;
+}
+
+// RFC 9110 token characters; values may not contain line breaks.
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+// We set these ourselves; a custom value would break ABS auth or the JSON bodies.
+const RESERVED_HEADERS = new Set(['authorization', 'content-type', 'content-length', 'host']);
+
+/**
+ * Parse extra headers from either an object or "Name: value" lines.
+ * Returns an error message for anything malformed or reserved.
+ */
+export function parseHeaders(raw: unknown): { headers: Record<string, string> } | { error: string } {
+  if (raw == null || raw === '') return { headers: {} };
+  let entries: [string, unknown][];
+  if (typeof raw === 'string') {
+    entries = [];
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const i = line.indexOf(':');
+      if (i <= 0) return { error: `header line must be "Name: value": ${line.trim()}` };
+      entries.push([line.slice(0, i), line.slice(i + 1)]);
+    }
+  } else if (typeof raw === 'object' && !Array.isArray(raw)) {
+    entries = Object.entries(raw as Record<string, unknown>);
+  } else {
+    return { error: 'headers must be an object' };
+  }
+  const headers: Record<string, string> = {};
+  for (const [rawName, rawValue] of entries) {
+    const name = rawName.trim();
+    if (!HEADER_NAME.test(name)) return { error: `invalid header name: ${name}` };
+    if (RESERVED_HEADERS.has(name.toLowerCase())) return { error: `header ${name} cannot be overridden` };
+    if (typeof rawValue !== 'string' || /[\r\n\0]/.test(rawValue)) return { error: `invalid value for header ${name}` };
+    headers[name] = rawValue.trim();
+  }
+  return { headers };
 }
 
 function parseCred(cred: Credential): AbsCred | null {
   const server = typeof cred.server === 'string' ? cred.server.trim() : '';
   const token = typeof cred.token === 'string' ? cred.token.trim() : '';
   if (!server || !token) return null;
-  return { server, token };
+  const h = parseHeaders(cred.headers);
+  if ('error' in h) return null;
+  return { server, token, headers: h.headers };
 }
 
 /** Normalize a server URL: add scheme if missing, strip trailing slashes. */
@@ -42,12 +84,12 @@ export function baseUrl(server: string): string {
   return url;
 }
 
-function authHeaders(token: string): Record<string, string> {
-  return { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+function authHeaders(c: AbsCred): Record<string, string> {
+  return { ...c.headers, authorization: `Bearer ${c.token}`, 'content-type': 'application/json' };
 }
 
 async function absGet(http: HttpTransport, c: AbsCred, path: string) {
-  const res = await http(`${baseUrl(c.server)}${path}`, { method: 'GET', headers: authHeaders(c.token) });
+  const res = await http(`${baseUrl(c.server)}${path}`, { method: 'GET', headers: authHeaders(c) });
   let body: any = null;
   if (res.status >= 200 && res.status < 300) {
     try {
@@ -60,12 +102,16 @@ async function absGet(http: HttpTransport, c: AbsCred, path: string) {
 }
 
 async function validate(cred: Credential, http: HttpTransport): Promise<ValidateResult> {
+  const h = parseHeaders(cred.headers);
+  if ('error' in h) return { ok: false, error: h.error };
   const c = parseCred(cred);
   if (!c) return { ok: false, error: 'server URL and API key are required' };
   try {
     const r = await absGet(http, c, '/api/me');
     if (r.status === 401 || r.status === 403) return { ok: false, error: 'invalid API key' };
     if (r.status >= 200 && r.status < 300) {
+      // An auth proxy without the right headers answers with its login page.
+      if (r.body === null) return { ok: false, error: 'not an Audiobookshelf API response (behind an auth proxy? add its headers)' };
       return { ok: true, accountLabel: r.body?.username ? `${r.body.username} @ ${c.server}` : c.server };
     }
     return { ok: false, error: `unexpected status ${r.status}` };
@@ -248,7 +294,7 @@ async function push(
 
   const res = await http(`${baseUrl(c.server)}/api/me/progress/${encodeURIComponent(m.externalId)}`, {
     method: 'PATCH',
-    headers: authHeaders(c.token),
+    headers: authHeaders(c),
     body: JSON.stringify(payload),
   });
   if (res.status === 401 || res.status === 403) {

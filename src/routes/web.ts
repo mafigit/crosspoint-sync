@@ -102,10 +102,10 @@ const STYLE = `
     color:var(--stone-500); margin:0 0 14px; }
 
   label { display:block; font-size:14px; font-weight:500; color:var(--stone-700); margin:0 0 6px; }
-  input { width:100%; padding:10px 14px; border:1px solid var(--stone-200); border-radius:8px;
+  input, textarea { width:100%; padding:10px 14px; border:1px solid var(--stone-200); border-radius:8px;
     background:var(--stone-50); color:var(--stone-900); font-size:14px; }
-  input::placeholder { color:var(--stone-400); }
-  input:focus { outline:none; border-color:var(--brand-400); box-shadow:0 0 0 3px rgba(74,122,98,0.15); }
+  input::placeholder, textarea::placeholder { color:var(--stone-400); }
+  input:focus, textarea:focus { outline:none; border-color:var(--brand-400); box-shadow:0 0 0 3px rgba(74,122,98,0.15); }
 
   button { appearance:none; border:0; border-radius:8px; padding:10px 16px; font-size:14px;
     font-weight:600; cursor:pointer; font-family:inherit; }
@@ -675,10 +675,13 @@ function render(conn) {
   } else if (conn.credential_kind === 'abs') {
     f.innerHTML = '<label>Server URL</label><input id="srv" class="mono" placeholder="https://audiobookshelf.example.com">'
       + '<div style="margin-top:10px"><label>API key</label><input id="tok" class="mono" type="password" placeholder="paste API key"></div>'
+      + '<details style="margin-top:14px"><summary class="muted" style="cursor:pointer">Extra headers (auth proxy)</summary><div style="margin-top:10px">'
+      + '<p class="muted" style="margin-top:0">Sent with every request, one <code>Name: value</code> per line. For Pangolin, create a share link and use its token: <code>P-Access-Token-Id</code> and <code>P-Access-Token</code>.</p>'
+      + '<textarea id="hdr" class="mono" rows="3" style="resize:vertical" autocomplete="off" spellcheck="false" placeholder="P-Access-Token-Id: …&#10;P-Access-Token: …"></textarea></div></details>'
       + '<button class="primary full mt" id="go">Connect Audiobookshelf</button><div class="err" id="e"></div>';
     $('go').onclick = async () => {
       $('e').textContent = '';
-      const r = await linkCredential({ server: $('srv').value.trim(), token: $('tok').value.trim() });
+      const r = await linkCredential({ server: $('srv').value.trim(), token: $('tok').value.trim(), headers: $('hdr').value });
       if (r.ok) done(); else $('e').textContent = r.data.message || 'Could not connect';
     };
   } else if (conn.credential_kind === 'cookies') {

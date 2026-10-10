@@ -7,16 +7,16 @@ import { claimReady } from '../src/connectors/queue.js';
 import { kosyncConnector, baseUrl } from '../src/connectors/kosync.js';
 import { bookfusionConnector, extractBooks } from '../src/connectors/bookfusion.js';
 import { hardcoverConnector } from '../src/connectors/hardcover.js';
-import { audiobookshelfConnector, baseUrl as absBaseUrl } from '../src/connectors/audiobookshelf.js';
+import { audiobookshelfConnector, baseUrl as absBaseUrl, parseHeaders as absParseHeaders } from '../src/connectors/audiobookshelf.js';
 import { bookorbitConnector } from '../src/connectors/bookorbit.js';
 import { pollConnector } from '../src/connectors/fanin.js';
 import { saveMatch } from '../src/connectors/store.js';
 
 function fakeTransport() {
-  const calls: { url: string; method: string; body?: string }[] = [];
+  const calls: { url: string; method: string; body?: string; headers?: Record<string, string> }[] = [];
   const handlers: { match: string; status: number; body: unknown }[] = [];
   const t: HttpTransport = async (url, init) => {
-    calls.push({ url, method: init.method, body: init.body });
+    calls.push({ url, method: init.method, body: init.body, headers: init.headers });
     const h = [...handlers].reverse().find((x) => url.includes(x.match) || (init.body ?? '').includes(x.match));
     const status = h?.status ?? 200;
     const body = h?.body ?? {};
@@ -107,6 +107,50 @@ describe('audiobookshelf connector', () => {
     const v = await audiobookshelfConnector.validate(CRED, fake.transport);
     expect(v.ok).toBe(true);
     expect(v.accountLabel).toContain('julia');
+  });
+
+  it('rejects a non-JSON answer, e.g. an auth proxy login page', async () => {
+    const fake = fakeTransport();
+    const t: HttpTransport = async (url, init) => {
+      await fake.transport(url, init);
+      return { status: 200, text: async () => '<html>', json: async () => { throw new SyntaxError('not json'); } };
+    };
+    const v = await audiobookshelfConnector.validate(CRED, t);
+    expect(v.ok).toBe(false);
+    expect(v.error).toContain('auth proxy');
+  });
+
+  it('parses extra headers from lines or an object', () => {
+    expect(absParseHeaders(undefined)).toEqual({ headers: {} });
+    expect(absParseHeaders('P-Access-Token-Id: abc\r\n\n P-Access-Token :  s3cr:et ')).toEqual({
+      headers: { 'P-Access-Token-Id': 'abc', 'P-Access-Token': 's3cr:et' },
+    });
+    expect(absParseHeaders({ 'X-Proxy': 'v' })).toEqual({ headers: { 'X-Proxy': 'v' } });
+    expect(absParseHeaders('no colon')).toHaveProperty('error');
+    expect(absParseHeaders('Bad Name: v')).toHaveProperty('error');
+    expect(absParseHeaders('Authorization: Basic x')).toHaveProperty('error');
+    expect(absParseHeaders({ 'X-A': 'a\nX-B: b' })).toHaveProperty('error');
+    expect(absParseHeaders(['X-A: a'])).toHaveProperty('error');
+  });
+
+  it('sends extra headers on every request, keeping its own auth', async () => {
+    const cred = { ...CRED, headers: 'P-Access-Token-Id: id1\nP-Access-Token: tok1' };
+    const fake = fakeTransport();
+    fake.on('/api/me', 200, { username: 'julia' });
+    expect((await audiobookshelfConnector.validate(cred, fake.transport)).ok).toBe(true);
+    await audiobookshelfConnector.push(cred, { externalId: 'li_1', confidence: 1 }, { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1 }, fake.transport);
+    expect(fake.calls.length).toBeGreaterThan(1);
+    for (const call of fake.calls) {
+      expect(call.headers).toMatchObject({ 'P-Access-Token-Id': 'id1', 'P-Access-Token': 'tok1', authorization: 'Bearer k' });
+    }
+  });
+
+  it('refuses malformed extra headers when linking', async () => {
+    const fake = fakeTransport();
+    const v = await audiobookshelfConnector.validate({ ...CRED, headers: 'Authorization: Basic x' }, fake.transport);
+    expect(v.ok).toBe(false);
+    expect(v.error).toContain('Authorization');
+    expect(fake.calls).toHaveLength(0);
   });
 
   it('matches a book by title/author across book libraries', async () => {
