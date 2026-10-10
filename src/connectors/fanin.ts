@@ -103,10 +103,12 @@ export async function pollConnector(
     return applied;
   }
 
+  // Fetch everything and decide per book: a single cursor would skip progress
+  // made before the book was matched, or older than another book's update.
   const since = getPullCursor(db, userId, connectorId);
   let changes;
   try {
-    changes = await conn.pullChanges!(decryptCredential(account, db), http, since);
+    changes = await conn.pullChanges!(decryptCredential(account, db), http, 0);
   } catch {
     return 0; // best-effort; try again next tick
   }
@@ -115,7 +117,11 @@ export async function pollConnector(
   for (const ch of changes) {
     if (ch.updatedAtMs > maxCursor) maxCursor = ch.updatedAtMs;
     const document = documentForExternal(db, userId, connectorId, ch.externalId);
-    if (document) applied += apply(ch, document);
+    if (!document) continue;
+    // Newest wins: skip a change no newer than the book's current progress.
+    const current = latestProgress(db, userId, document);
+    if (current && ch.updatedAtMs <= current.updated_at * 1000) continue;
+    applied += apply(ch, document);
   }
 
   if (maxCursor > since) setPullCursor(db, userId, connectorId, maxCursor);

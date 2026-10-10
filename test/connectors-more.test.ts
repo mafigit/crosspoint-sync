@@ -286,7 +286,7 @@ describe('audiobookshelf fan-in (audiobook -> ebook)', () => {
       method: 'PUT', headers,
       body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.2, device_id: 'reader' }),
     });
-    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.6, isFinished: false, lastUpdate: 5000, episodeId: null }] });
+    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.6, isFinished: false, lastUpdate: Date.now() + 60_000, episodeId: null }] });
     // Clear whatever the device's own 0.2% sync queued, so we only observe fan-in.
     db.prepare('DELETE FROM connector_queue').run();
 
@@ -321,7 +321,7 @@ describe('audiobookshelf fan-in (audiobook -> ebook)', () => {
       method: 'PUT', headers,
       body: JSON.stringify({ document: DOC, progress: XPOINTER, percentage: 0.38, device_id: 'kindle' }),
     });
-    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.62, isFinished: false, lastUpdate: 8000, episodeId: null }] });
+    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.62, isFinished: false, lastUpdate: Date.now() + 60_000, episodeId: null }] });
     db.prepare('DELETE FROM connector_queue').run();
 
     const applied = await pollConnector(db, userId, 'audiobookshelf', fake.transport);
@@ -350,9 +350,40 @@ describe('audiobookshelf fan-in (audiobook -> ebook)', () => {
       method: 'PUT', headers,
       body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.4, device_id: 'reader' }),
     });
-    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.401, isFinished: false, lastUpdate: 9000, episodeId: null }] });
+    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.401, isFinished: false, lastUpdate: Date.now() + 60_000, episodeId: null }] });
     const applied = await pollConnector(db, userId, 'audiobookshelf', fake.transport);
     expect(applied).toBe(0); // within epsilon -> ignored
+  });
+
+  it('applies progress made before the book was matched, and skips progress older than the reader', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/me', 200, { username: 'julia' });
+    const { app, db } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    const userId = 1;
+    await app.request('/api/v1/connectors/audiobookshelf', {
+      method: 'PUT', headers, body: JSON.stringify({ credential: { server: 'abs.test', token: 'k' } }),
+    });
+    await app.request('/syncs/progress', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.1, device_id: 'reader' }),
+    });
+    const listened = Date.now() + 60_000;
+    fake.on('/api/me', 200, {
+      mediaProgress: [
+        { libraryItemId: 'li_1', progress: 0.3, isFinished: false, lastUpdate: listened, episodeId: null },
+        { libraryItemId: 'li_other', progress: 0.5, isFinished: false, lastUpdate: listened + 1000, episodeId: null },
+      ],
+    });
+    // Nothing matched yet: nothing applies.
+    expect(await pollConnector(db, userId, 'audiobookshelf', fake.transport)).toBe(0);
+    // Matched later: the earlier listening still lands.
+    saveMatch(db, userId, 'audiobookshelf', DOC, { externalId: 'li_1', confidence: 1 }, 'manual');
+    expect(await pollConnector(db, userId, 'audiobookshelf', fake.transport)).toBe(1);
+    const got = await (await app.request(`/syncs/progress/${DOC}`, { headers })).json();
+    expect(got.percentage).toBe(0.3);
+    // Unchanged on the next poll: no re-apply.
+    expect(await pollConnector(db, userId, 'audiobookshelf', fake.transport)).toBe(0);
   });
 });
 
