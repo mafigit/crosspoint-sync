@@ -131,6 +131,8 @@ describe('audiobookshelf connector', () => {
     expect(absParseHeaders('Authorization: Basic x')).toHaveProperty('error');
     expect(absParseHeaders({ 'X-A': 'a\nX-B: b' })).toHaveProperty('error');
     expect(absParseHeaders(['X-A: a'])).toHaveProperty('error');
+    expect(absParseHeaders('P-Access-Token: \u2022\u2022\u2022')).toHaveProperty('error');
+    expect(absParseHeaders('P-Access-Token: \u2026')).toHaveProperty('error');
   });
 
   it('sends extra headers on every request, keeping its own auth', async () => {

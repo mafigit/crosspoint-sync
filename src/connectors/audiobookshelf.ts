@@ -63,6 +63,8 @@ export function parseHeaders(raw: unknown): { headers: Record<string, string> } 
     if (!HEADER_NAME.test(name)) return { error: `invalid header name: ${name}` };
     if (RESERVED_HEADERS.has(name.toLowerCase())) return { error: `header ${name} cannot be overridden` };
     if (typeof rawValue !== 'string' || /[\r\n\0]/.test(rawValue)) return { error: `invalid value for header ${name}` };
+    // fetch only sends Latin-1; a pasted masked token ("•••") would fail deep inside it.
+    if (/[^\t\x20-\x7e\x80-\xff]/.test(rawValue)) return { error: `header ${name} contains characters that cannot be sent (masked or placeholder text?)` };
     headers[name] = rawValue.trim();
   }
   return { headers };
@@ -106,6 +108,7 @@ async function validate(cred: Credential, http: HttpTransport): Promise<Validate
   if ('error' in h) return { ok: false, error: h.error };
   const c = parseCred(cred);
   if (!c) return { ok: false, error: 'server URL and API key are required' };
+  if (/[^\x21-\x7e]/.test(c.token)) return { ok: false, error: 'API key contains characters that cannot be sent (masked or placeholder text?)' };
   try {
     const r = await absGet(http, c, '/api/me');
     if (r.status === 401 || r.status === 403) return { ok: false, error: 'invalid API key' };
